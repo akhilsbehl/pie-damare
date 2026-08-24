@@ -65,7 +65,7 @@ function getBuiltInTools(cwd: string) {
 
 type ToolDefinition = Parameters<ExtensionAPI["registerTool"]>[0];
 
-const QUIET_BG_TOOLS = new Set(["bg_list", "bg_output", "bg_stop"]);
+const QUIET_BG_TOOLS = new Set(["bash", "bg_list", "bg_output", "bg_stop"]);
 
 function registerQuietBackgroundTasks(pi: ExtensionAPI): void {
 	const captured = new Map<string, ToolDefinition>();
@@ -86,6 +86,13 @@ function registerQuietBackgroundTasks(pi: ExtensionAPI): void {
 	}) as ExtensionAPI;
 
 	bgTasksExtension(forwardingPi);
+
+	// Keep background completion messages in the agent context, but hide their
+	// transcript rendering in Damare's quiet mode.
+	pi.registerMessageRenderer("bg-task-notification", () => ({
+		render: () => [],
+		invalidate: () => {},
+	}));
 
 	for (const name of QUIET_BG_TOOLS) {
 		const definition = captured.get(name);
