@@ -17,6 +17,7 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import bgTasksExtension from "/home/akhil/.pi/agent/npm/node_modules/pi-bg-tasks/extensions/bg-tasks/index.ts";
 import {
 	createEditTool,
 	createFindTool,
@@ -62,7 +63,46 @@ function getBuiltInTools(cwd: string) {
 	return tools;
 }
 
+type ToolDefinition = Parameters<ExtensionAPI["registerTool"]>[0];
+
+const QUIET_BG_TOOLS = new Set(["bg_list", "bg_output", "bg_stop"]);
+
+function registerQuietBackgroundTasks(pi: ExtensionAPI): void {
+	const captured = new Map<string, ToolDefinition>();
+	const forwardingPi = new Proxy(pi, {
+		get(target, property, receiver) {
+			if (property === "registerTool") {
+				return (definition: ToolDefinition) => {
+					if (QUIET_BG_TOOLS.has(definition.name)) {
+						captured.set(definition.name, definition);
+						return;
+					}
+					pi.registerTool(definition);
+				};
+			}
+			const value = Reflect.get(target, property, receiver);
+			return typeof value === "function" ? value.bind(target) : value;
+		},
+	}) as ExtensionAPI;
+
+	bgTasksExtension(forwardingPi);
+
+	for (const name of QUIET_BG_TOOLS) {
+		const definition = captured.get(name);
+		if (!definition) {
+			throw new Error(`Expected background-task tool was not captured: ${name}`);
+		}
+		pi.registerTool({
+			...definition,
+			renderResult() {
+				return new Text("", 0, 0);
+			},
+		});
+	}
+}
+
 export default function (pi: ExtensionAPI) {
+	registerQuietBackgroundTasks(pi);
 	// =========================================================================
 	// Read Tool
 	// =========================================================================
