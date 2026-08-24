@@ -17,11 +17,7 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-// This package is loaded here rather than separately in settings so its
-// original tool definition can be captured before adding a quiet renderer.
-import pattyBackgroundTasksExtension from "/home/akhil/.pi/agent/npm/node_modules/pi-patty-bg-tasks/index.ts";
 import {
-	createBashTool,
 	createEditTool,
 	createFindTool,
 	createGrepTool,
@@ -49,7 +45,6 @@ const toolCache = new Map<string, ReturnType<typeof createBuiltInTools>>();
 function createBuiltInTools(cwd: string) {
 	return {
 		read: createReadTool(cwd),
-		bash: createBashTool(cwd),
 		edit: createEditTool(cwd),
 		write: createWriteTool(cwd),
 		find: createFindTool(cwd),
@@ -67,52 +62,7 @@ function getBuiltInTools(cwd: string) {
 	return tools;
 }
 
-type ToolDefinition = Parameters<ExtensionAPI["registerTool"]>[0];
-
-const QUIET_UPSTREAM_TOOLS = new Set(["jobs"]);
-
-/**
- * Load the upstream extension while capturing the tool definition whose
- * execution must remain upstream-owned. The forwarding API is important for
- * Patty: its other tools and lifecycle handlers must share the same registry
- * as the captured jobs tool.
- */
-function registerQuietUpstreamTools(pi: ExtensionAPI): void {
-	const captured = new Map<string, ToolDefinition>();
-	const forwardingPi = new Proxy(pi, {
-		get(target, property, receiver) {
-			if (property === "registerTool") {
-				return (definition: ToolDefinition) => {
-					if (QUIET_UPSTREAM_TOOLS.has(definition.name)) {
-						captured.set(definition.name, definition);
-						return;
-					}
-					pi.registerTool(definition);
-				};
-			}
-			const value = Reflect.get(target, property, receiver);
-			return typeof value === "function" ? value.bind(target) : value;
-		},
-	}) as ExtensionAPI;
-
-	pattyBackgroundTasksExtension(forwardingPi);
-
-	for (const name of QUIET_UPSTREAM_TOOLS) {
-		const definition = captured.get(name);
-		if (!definition) {
-			throw new Error(`Expected upstream tool registration was not captured: ${name}`);
-		}
-		pi.registerTool({
-			...definition,
-			renderResult() {
-				return new Text("", 0, 0);
-			},
-		});
-	}
-}
-
 export default function (pi: ExtensionAPI) {
-	registerQuietUpstreamTools(pi);
 	// =========================================================================
 	// Read Tool
 	// =========================================================================
