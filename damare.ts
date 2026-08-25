@@ -141,12 +141,21 @@ function registerQuietSubagents(pi: ExtensionAPI): void {
 
 	subagentsExtension(forwardingPi);
 
-	// Keep background subagent completion messages in the agent context, but hide their
+	// Keep background subagent messages in the agent context, but hide their
 	// transcript rendering in Damare's quiet mode.
-	pi.registerMessageRenderer("subagent-notify", () => ({
-		render: () => [],
-		invalidate: () => {},
-	}));
+	for (const messageType of [
+		"subagent-notify",
+		"subagent_supervisor_request",
+		"subagent-control-notice",
+		"subagent-steering-notice",
+		"subagent-watchdog-warning",
+		"subagent-wait-subscription",
+	]) {
+		pi.registerMessageRenderer(messageType, () => ({
+			render: () => [],
+			invalidate: () => {},
+		}));
+	}
 
 	if (!captured.has("subagent")) {
 		throw new Error("Expected subagent tool was not captured: subagent");
