@@ -112,6 +112,10 @@ function registerQuietBackgroundTasks(pi: ExtensionAPI): void {
 const QUIET_SUBAGENT_TOOLS = new Set(["subagent", "subagent_wait", "subagent_supervisor"]);
 
 function registerQuietSubagents(pi: ExtensionAPI): void {
+	if (process.env.PI_SUBAGENT_CHILD === "1") {
+		return;
+	}
+
 	const captured = new Map<string, ToolDefinition>();
 	const forwardingPi = new Proxy(pi, {
 		get(target, property, receiver) {
