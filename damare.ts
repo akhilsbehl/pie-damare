@@ -145,11 +145,19 @@ function registerQuietSubagents(pi: ExtensionAPI): void {
 	// transcript rendering in Damare's quiet mode.
 	for (const messageType of [
 		"subagent-notify",
+		"subagent_notify",
 		"subagent_supervisor_request",
+		"subagent-supervisor-request",
+		"subagent_control_notice",
 		"subagent-control-notice",
+		"subagent_steering_notice",
 		"subagent-steering-notice",
+		"subagent_watchdog_warning",
 		"subagent-watchdog-warning",
 		"subagent-wait-subscription",
+		"subagent_wait_subscription",
+		"subagents-admin",
+		"subagents_admin",
 	]) {
 		pi.registerMessageRenderer(messageType, () => ({
 			render: () => [],
