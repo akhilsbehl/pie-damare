@@ -18,6 +18,7 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import bgTasksExtension from "/home/akhil/.pi/agent/npm/node_modules/pi-bg-tasks/extensions/bg-tasks/index.ts";
+import subagentsExtension from "/home/akhil/.pi/agent/npm/node_modules/pi-subagents/index.ts";
 import {
 	createEditTool,
 	createFindTool,
@@ -108,8 +109,49 @@ function registerQuietBackgroundTasks(pi: ExtensionAPI): void {
 	}
 }
 
+const QUIET_SUBAGENT_TOOLS = new Set(["subagent", "subagent_wait", "subagent_supervisor"]);
+
+function registerQuietSubagents(pi: ExtensionAPI): void {
+	const captured = new Map<string, ToolDefinition>();
+	const forwardingPi = new Proxy(pi, {
+		get(target, property, receiver) {
+			if (property === "registerTool") {
+				return (definition: ToolDefinition) => {
+					if (QUIET_SUBAGENT_TOOLS.has(definition.name)) {
+						captured.set(definition.name, definition);
+						pi.registerTool({
+							...definition,
+							renderResult() {
+								return new Text("", 0, 0);
+							},
+						});
+						return;
+					}
+					pi.registerTool(definition);
+				};
+			}
+			const value = Reflect.get(target, property, receiver);
+			return typeof value === "function" ? value.bind(target) : value;
+		},
+	}) as ExtensionAPI;
+
+	subagentsExtension(forwardingPi);
+
+	// Keep background subagent completion messages in the agent context, but hide their
+	// transcript rendering in Damare's quiet mode.
+	pi.registerMessageRenderer("subagent-notify", () => ({
+		render: () => [],
+		invalidate: () => {},
+	}));
+
+	if (!captured.has("subagent")) {
+		throw new Error("Expected subagent tool was not captured: subagent");
+	}
+}
+
 export default function (pi: ExtensionAPI) {
 	registerQuietBackgroundTasks(pi);
+	registerQuietSubagents(pi);
 	// =========================================================================
 	// Read Tool
 	// =========================================================================
