@@ -16,9 +16,9 @@
  * Then use ctrl+o to toggle between minimal (collapsed) and full (expanded) views.
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import bgTasksExtension from "/home/akhil/.pi/agent/npm/node_modules/pi-bg-tasks/extensions/bg-tasks/index.ts";
-import subagentsExtension from "/home/akhil/.pi/agent/npm/node_modules/pi-subagents/index.ts";
+import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import {
 	createEditTool,
 	createFindTool,
@@ -67,8 +67,25 @@ function getBuiltInTools(cwd: string) {
 type ToolDefinition = Parameters<ExtensionAPI["registerTool"]>[0];
 
 const QUIET_BG_TOOLS = new Set(["bash", "bg_list", "bg_output", "bg_stop"]);
+const PI_PACKAGE_NODE_MODULES = join(getAgentDir(), "npm", "node_modules");
 
-function registerQuietBackgroundTasks(pi: ExtensionAPI): void {
+type ExtensionFactory = (pi: ExtensionAPI) => void | Promise<void>;
+
+/**
+ * Load a currently installed Pi package at factory time. Keeping this out of
+ * the static import graph means the package manager can replace a package
+ * before this extension loads it, and avoids a machine-specific home path.
+ */
+async function loadInstalledExtension(packageName: string, relativePath: string): Promise<ExtensionFactory> {
+	const extensionPath = join(PI_PACKAGE_NODE_MODULES, packageName, relativePath);
+	const module = await import(pathToFileURL(extensionPath).href);
+	if (typeof module.default !== "function") {
+		throw new Error(`Installed package extension has no default factory: ${packageName}`);
+	}
+	return module.default as ExtensionFactory;
+}
+
+async function registerQuietBackgroundTasks(pi: ExtensionAPI): Promise<void> {
 	const captured = new Map<string, ToolDefinition>();
 	const forwardingPi = new Proxy(pi, {
 		get(target, property, receiver) {
@@ -86,7 +103,8 @@ function registerQuietBackgroundTasks(pi: ExtensionAPI): void {
 		},
 	}) as ExtensionAPI;
 
-	bgTasksExtension(forwardingPi);
+	const bgTasksExtension = await loadInstalledExtension("pi-bg-tasks", "extensions/bg-tasks/index.ts");
+	await bgTasksExtension(forwardingPi);
 
 	// Keep background completion messages in the agent context, but hide their
 	// transcript rendering in Damare's quiet mode.
@@ -111,7 +129,7 @@ function registerQuietBackgroundTasks(pi: ExtensionAPI): void {
 
 const QUIET_SUBAGENT_TOOLS = new Set(["subagent", "subagent_wait", "subagent_supervisor"]);
 
-function registerQuietSubagents(pi: ExtensionAPI): void {
+async function registerQuietSubagents(pi: ExtensionAPI): Promise<void> {
 	if (process.env.PI_SUBAGENT_CHILD === "1") {
 		return;
 	}
@@ -139,7 +157,8 @@ function registerQuietSubagents(pi: ExtensionAPI): void {
 		},
 	}) as ExtensionAPI;
 
-	subagentsExtension(forwardingPi);
+	const subagentsExtension = await loadInstalledExtension("pi-subagents", "index.ts");
+	await subagentsExtension(forwardingPi);
 
 	// Keep background subagent messages in the agent context, but hide their
 	// transcript rendering in Damare's quiet mode.
@@ -170,9 +189,51 @@ function registerQuietSubagents(pi: ExtensionAPI): void {
 	}
 }
 
-export default function (pi: ExtensionAPI) {
-	registerQuietBackgroundTasks(pi);
-	registerQuietSubagents(pi);
+function isQuietAgentBrowserTool(name: string): boolean {
+	return name === "agent_browser" || name.startsWith("agent_browser_");
+}
+
+async function registerQuietAgentBrowser(pi: ExtensionAPI): Promise<void> {
+	const captured = new Map<string, ToolDefinition>();
+	const forwardingPi = new Proxy(pi, {
+		get(target, property, receiver) {
+			if (property === "registerTool") {
+				return (definition: ToolDefinition) => {
+					if (isQuietAgentBrowserTool(definition.name)) {
+						captured.set(definition.name, definition);
+						return;
+					}
+					pi.registerTool(definition);
+				};
+			}
+			const value = Reflect.get(target, property, receiver);
+			return typeof value === "function" ? value.bind(target) : value;
+		},
+	}) as ExtensionAPI;
+
+	const agentBrowserExtension = await loadInstalledExtension(
+		"pi-agent-browser-native",
+		"dist/extensions/agent-browser/index.js",
+	);
+	await agentBrowserExtension(forwardingPi);
+
+	if (!captured.has("agent_browser")) {
+		throw new Error("Expected agent-browser tool was not captured: agent_browser");
+	}
+	for (const [name, definition] of captured) {
+		pi.registerTool({
+			...definition,
+			renderResult() {
+				return new Text("", 0, 0);
+			},
+		});
+	}
+}
+
+export default async function (pi: ExtensionAPI) {
+	await registerQuietBackgroundTasks(pi);
+	await registerQuietSubagents(pi);
+	await registerQuietAgentBrowser(pi);
 	// =========================================================================
 	// Read Tool
 	// =========================================================================
