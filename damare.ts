@@ -129,6 +129,31 @@ async function registerQuietBackgroundTasks(pi: ExtensionAPI): Promise<void> {
 
 const QUIET_SUBAGENT_TOOLS = new Set(["subagent", "subagent_wait", "subagent_supervisor"]);
 
+type SubagentCall = { action?: string; task?: string; message?: string };
+
+function renderRawSubagentDetails(call: SubagentCall | undefined, result: any, theme: any): Text {
+	const lines: string[] = [];
+	if (call?.action === "steer") lines.push(`requested_message: ${call.message ?? ""}`);
+	else if (!call?.action && call?.task !== undefined) lines.push(`task: ${call.task}`);
+
+	const details = result?.details;
+	for (const child of details?.results ?? []) {
+		const agentProfile = child.agent ?? "unknown";
+		// pi-subagents exposes a stable result index, not a separate agent_id.
+		const agentId = `${details?.runId ?? "unknown"}/${child.index ?? "unknown"}`;
+		lines.push(`agent_profile: ${agentProfile}`);
+		lines.push(`agent_id: ${agentId}`);
+		lines.push(`model: ${child.model ?? "unknown"}`);
+		lines.push(`thinking_level: ${child.thinking ?? "unknown"}`);
+		lines.push(`final_result: ${child.finalOutput ?? ""}`);
+	}
+	if (lines.length === 0) {
+		const text = result?.content?.find((entry: any) => entry.type === "text")?.text ?? "";
+		if (text) lines.push(text);
+	}
+	return new Text(`\n${lines.map((line) => theme.fg("toolOutput", line)).join("\n")}`, 0, 0);
+}
+
 async function registerQuietSubagents(pi: ExtensionAPI): Promise<void> {
 	if (process.env.PI_SUBAGENT_CHILD === "1") {
 		return;
@@ -141,10 +166,24 @@ async function registerQuietSubagents(pi: ExtensionAPI): Promise<void> {
 				return (definition: ToolDefinition) => {
 					if (QUIET_SUBAGENT_TOOLS.has(definition.name)) {
 						captured.set(definition.name, definition);
+						if (definition.name !== "subagent") {
+							pi.registerTool({ ...definition, renderResult: () => new Text("", 0, 0) });
+							return;
+						}
+						const calls = new Map<string, SubagentCall>();
 						pi.registerTool({
 							...definition,
-							renderResult() {
-								return new Text("", 0, 0);
+							renderCall(args, theme, context) {
+								const id = String((context as any)?.toolCallId ?? "");
+								calls.set(id, args as SubagentCall);
+								return definition.renderCall?.(args, theme, context) ?? new Text("subagent", 0, 0);
+							},
+							renderResult(result, options, theme, context) {
+								if (!options.expanded) return new Text("", 0, 0);
+								const id = String((context as any)?.toolCallId ?? "");
+								const rendered = renderRawSubagentDetails(calls.get(id), result, theme);
+								calls.delete(id);
+								return rendered;
 							},
 						});
 						return;
