@@ -27,7 +27,7 @@ import {
 	createReadTool,
 	createWriteTool,
 } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { Box, Text } from "@earendil-works/pi-tui";
 import { homedir } from "os";
 
 /**
@@ -175,10 +175,12 @@ function getSubagentNotificationOutput(message: any): string {
 	return body.filter((line) => !/^\d+\. /.test(line) && !isMetadata(line)).join("\n").trim();
 }
 
-function renderSubagentNotification(message: any, options: any, theme: any): Text {
+function renderSubagentNotification(message: any, options: any, theme: any): Box | Text {
 	if (!options.expanded) return new Text("", 0, 0);
 	const output = getSubagentNotificationOutput(message);
-	return new Text(output ? `\n${theme.fg("toolOutput", output)}` : "", 0, 0);
+	const box = new Box(1, 1, (text: string) => theme.bg("toolPendingBg", text));
+	box.addChild(new Text(output ? `\n${theme.fg("toolOutput", output)}` : "", 0, 0));
+	return box;
 }
 
 async function registerQuietSubagents(pi: ExtensionAPI): Promise<void> {
