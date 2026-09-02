@@ -176,8 +176,13 @@ function getSubagentNotificationOutput(message: any): string {
 }
 
 function renderSubagentNotification(message: any, options: any, theme: any): Box | Text {
-	if (!options.expanded) return new Text("", 0, 0);
 	const output = getSubagentNotificationOutput(message);
+	if (!options.expanded) {
+		// Keep the collapsed completion row coloured without exposing its output.
+		const box = new Box(1, 0, (text: string) => theme.bg("toolPendingBg", text));
+		box.addChild(new Text("\u200b", 0, 0));
+		return box;
+	}
 	if (!output) return new Text("", 0, 0);
 	const box = new Box(1, 1, (text: string) => theme.bg("toolPendingBg", text));
 	box.addChild(new Text(`\n${theme.fg("toolOutput", output)}`, 0, 0));
