@@ -180,7 +180,7 @@ function renderSubagentNotification(message: any, options: any, theme: any): Box
 	if (!options.expanded) {
 		// Keep the collapsed completion row coloured without exposing its output.
 		const box = new Box(1, 0, (text: string) => theme.bg("toolPendingBg", text));
-		box.addChild(new Text("\u200b", 0, 0));
+		box.addChild(new Text("Subagent result — Ctrl-K to expand", 0, 0));
 		return box;
 	}
 	if (!output) return new Text("", 0, 0);
