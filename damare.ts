@@ -181,9 +181,7 @@ async function registerQuietSubagents(pi: ExtensionAPI): Promise<void> {
 							renderResult(result, options, theme, context) {
 								if (!options.expanded) return new Text("", 0, 0);
 								const id = String((context as any)?.toolCallId ?? "");
-								const rendered = renderRawSubagentDetails(calls.get(id), result, theme);
-								calls.delete(id);
-								return rendered;
+								return renderRawSubagentDetails(calls.get(id), result, theme);
 							},
 						});
 						return;
