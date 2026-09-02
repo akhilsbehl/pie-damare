@@ -136,22 +136,49 @@ function renderRawSubagentDetails(call: SubagentCall | undefined, result: any, t
 	if (call?.action === "steer") lines.push(`requested_message: ${call.message ?? ""}`);
 	else if (!call?.action && call?.task !== undefined) lines.push(`task: ${call.task}`);
 
-	const details = result?.details;
-	for (const child of details?.results ?? []) {
-		const agentProfile = child.agent ?? "unknown";
-		// pi-subagents exposes a stable result index, not a separate agent_id.
-		const agentId = `${details?.runId ?? "unknown"}/${child.index ?? "unknown"}`;
-		lines.push(`agent_profile: ${agentProfile}`);
-		lines.push(`agent_id: ${agentId}`);
-		lines.push(`model: ${child.model ?? "unknown"}`);
-		lines.push(`thinking_level: ${child.thinking ?? "unknown"}`);
-		lines.push(`final_result: ${child.finalOutput ?? ""}`);
+	for (const child of result?.details?.results ?? []) {
+		if (typeof child.finalOutput === "string") lines.push(child.finalOutput);
 	}
-	if (lines.length === 0) {
-		const text = result?.content?.find((entry: any) => entry.type === "text")?.text ?? "";
-		if (text) lines.push(text);
+	return new Text(lines.length ? `\n${lines.map((line) => theme.fg("toolOutput", line)).join("\n")}` : "", 0, 0);
+}
+
+function getMessageText(message: any): string {
+	if (typeof message?.content === "string") return message.content;
+	return (message?.content ?? [])
+		.filter((entry: any) => entry.type === "text")
+		.map((entry: any) => entry.text)
+		.join("\n");
+}
+
+function getSubagentNotificationOutput(message: any): string {
+	const details = message?.details;
+	if (typeof details?.resultPreview === "string") return details.resultPreview.trim();
+
+	const lines = getMessageText(message).split("\n");
+	const header = lines[0] ?? "";
+	const isSingleCompletion = /^(Background task|Detached foreground task) (completed|failed|paused|stopped): /.test(header);
+	const isGroupedCompletion = /^Background tasks completed \(\d+\): /.test(header);
+	if (!isSingleCompletion && !isGroupedCompletion) return lines.join("\n").trim();
+
+	const isMetadata = (line: string) => /^(Parallel handoff|Workflow run|Child runs|Reconciled detached child|Session|Session file|Session share error): /.test(line);
+	let body = lines.slice(2);
+	if (isSingleCompletion) {
+		if (/^Scheduled run from \*\*/.test(body[0] ?? "")) {
+			body = body.slice(body[1]?.trim() === "" ? 2 : 1);
+		}
+		const metadataIndex = body.findIndex(isMetadata);
+		const resultEnd = metadataIndex >= 0
+			? metadataIndex > 0 && body[metadataIndex - 1]?.trim() === "" ? metadataIndex - 1 : metadataIndex
+			: body.length;
+		return body.slice(0, resultEnd).join("\n").trim();
 	}
-	return new Text(`\n${lines.map((line) => theme.fg("toolOutput", line)).join("\n")}`, 0, 0);
+	return body.filter((line) => !/^\d+\. /.test(line) && !isMetadata(line)).join("\n").trim();
+}
+
+function renderSubagentNotification(message: any, options: any, theme: any): Text {
+	if (!options.expanded) return new Text("", 0, 0);
+	const output = getSubagentNotificationOutput(message);
+	return new Text(output ? `\n${theme.fg("toolOutput", output)}` : "", 0, 0);
 }
 
 async function registerQuietSubagents(pi: ExtensionAPI): Promise<void> {
@@ -162,6 +189,14 @@ async function registerQuietSubagents(pi: ExtensionAPI): Promise<void> {
 	const captured = new Map<string, ToolDefinition>();
 	const forwardingPi = new Proxy(pi, {
 		get(target, property, receiver) {
+			if (property === "sendMessage") {
+				return (message: any, options?: any) => {
+					if (message?.customType === "subagent-notify") {
+						return pi.sendMessage({ ...message, display: true }, options);
+					}
+					return pi.sendMessage(message, options);
+				};
+			}
 			if (property === "registerTool") {
 				return (definition: ToolDefinition) => {
 					if (QUIET_SUBAGENT_TOOLS.has(definition.name)) {
@@ -197,10 +232,10 @@ async function registerQuietSubagents(pi: ExtensionAPI): Promise<void> {
 	const subagentsExtension = await loadInstalledExtension("pi-subagents", "index.ts");
 	await subagentsExtension(forwardingPi);
 
-	// Keep background subagent messages in the agent context, but hide their
-	// transcript rendering in Damare's quiet mode.
+	// Keep background subagent messages in the agent context, but render their
+	// raw output only when Damare's expanded view is selected.
+	pi.registerMessageRenderer("subagent-notify", renderSubagentNotification);
 	for (const messageType of [
-		"subagent-notify",
 		"subagent_notify",
 		"subagent_supervisor_request",
 		"subagent-supervisor-request",
