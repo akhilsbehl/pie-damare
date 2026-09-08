@@ -70,6 +70,9 @@ const QUIET_BG_TOOLS = new Set(["bash", "bg_list", "bg_output", "bg_stop"]);
 const PI_PACKAGE_NODE_MODULES = join(getAgentDir(), "npm", "node_modules");
 
 type ExtensionFactory = (pi: ExtensionAPI) => void | Promise<void>;
+type WorkflowScriptFormatter = (source: string) => Promise<string>;
+
+let workflowScriptFormatter: Promise<WorkflowScriptFormatter> | undefined;
 
 /**
  * Load a currently installed Pi package at factory time. Keeping this out of
@@ -83,6 +86,34 @@ async function loadInstalledExtension(packageName: string, relativePath: string)
 		throw new Error(`Installed package extension has no default factory: ${packageName}`);
 	}
 	return module.default as ExtensionFactory;
+}
+
+/**
+ * Prettier v3 formatting is asynchronous. Load Pi's managed copy and its
+ * JavaScript parser plugins explicitly before a tool result is rendered.
+ */
+async function loadWorkflowScriptFormatter(): Promise<WorkflowScriptFormatter> {
+	const prettierPath = join(PI_PACKAGE_NODE_MODULES, "prettier", "index.mjs");
+	const babelPluginPath = join(PI_PACKAGE_NODE_MODULES, "prettier", "plugins", "babel.mjs");
+	const estreePluginPath = join(PI_PACKAGE_NODE_MODULES, "prettier", "plugins", "estree.mjs");
+	const [prettier, babelPlugin, estreePlugin] = await Promise.all([
+		import(pathToFileURL(prettierPath).href),
+		import(pathToFileURL(babelPluginPath).href),
+		import(pathToFileURL(estreePluginPath).href),
+	]);
+	if (typeof prettier.format !== "function") {
+		throw new Error("Pi-managed Prettier has no format function");
+	}
+	return (source) => prettier.format(source, { parser: "babel", plugins: [babelPlugin, estreePlugin] });
+}
+
+async function formatWorkflowScript(source: string): Promise<string> {
+	try {
+		workflowScriptFormatter ??= loadWorkflowScriptFormatter();
+		return await (await workflowScriptFormatter)(source);
+	} catch {
+		return source;
+	}
 }
 
 async function registerQuietBackgroundTasks(pi: ExtensionAPI): Promise<void> {
@@ -158,12 +189,18 @@ function withoutForcedSubagentCollapse(ctx: any): any {
 	});
 }
 
-function renderRawSubagentDetails(call: SubagentCall | undefined, result: any, theme: any): Text {
+function renderRawSubagentDetails(
+	call: SubagentCall | undefined,
+	formattedWorkflowScript: string | undefined,
+	result: any,
+	theme: any,
+): Text {
 	const lines: string[] = [];
 	if (call?.action === "steer") lines.push(`requested_message: ${call.message ?? ""}`);
 	else if (!call?.action && call?.task !== undefined) lines.push(`task: ${call.task}`);
 	if (typeof call?.workflowScript === "string" && call.workflowScript.length > 0) {
-		lines.push(`workflowScript: ${call.workflowScript}`);
+		const script = formattedWorkflowScript ?? call.workflowScript;
+		lines.push(`workflowScript:\n${script.split("\n").map((line) => `  ${line}`).join("\n")}`);
 	}
 
 	const children = Array.isArray(result?.details?.results) ? result.details.results : [];
@@ -259,9 +296,13 @@ async function registerQuietSubagents(pi: ExtensionAPI): Promise<void> {
 							return;
 						}
 						const calls = new Map<string, SubagentCall>();
+						const formattedWorkflowScripts = new Map<string, string>();
 						pi.registerTool({
 							...definition,
 							async execute(toolCallId, params, signal, onUpdate, ctx) {
+								if (typeof params?.workflowScript === "string") {
+									formattedWorkflowScripts.set(String(toolCallId), await formatWorkflowScript(params.workflowScript));
+								}
 								return definition.execute(toolCallId, params, signal, onUpdate, withoutForcedSubagentCollapse(ctx));
 							},
 							renderCall(args, theme, context) {
@@ -272,7 +313,7 @@ async function registerQuietSubagents(pi: ExtensionAPI): Promise<void> {
 							renderResult(result, options, theme, context) {
 								if (!options.expanded) return new Text("", 0, 0);
 								const id = String((context as any)?.toolCallId ?? "");
-								return renderRawSubagentDetails(calls.get(id), result, theme);
+								return renderRawSubagentDetails(calls.get(id), formattedWorkflowScripts.get(id), result, theme);
 							},
 						});
 						return;
