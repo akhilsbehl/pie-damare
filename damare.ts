@@ -129,7 +129,7 @@ async function registerQuietBackgroundTasks(pi: ExtensionAPI): Promise<void> {
 
 const QUIET_SUBAGENT_TOOLS = new Set(["subagent", "subagent_wait", "subagent_supervisor"]);
 
-type SubagentCall = { action?: string; task?: string; message?: string };
+type SubagentCall = { action?: string; task?: string; message?: string; workflowScript?: string };
 
 type SubagentChildResult = { index?: unknown; task?: unknown; finalOutput?: unknown };
 
@@ -162,6 +162,9 @@ function renderRawSubagentDetails(call: SubagentCall | undefined, result: any, t
 	const lines: string[] = [];
 	if (call?.action === "steer") lines.push(`requested_message: ${call.message ?? ""}`);
 	else if (!call?.action && call?.task !== undefined) lines.push(`task: ${call.task}`);
+	if (typeof call?.workflowScript === "string" && call.workflowScript.length > 0) {
+		lines.push(`workflowScript: ${call.workflowScript}`);
+	}
 
 	const children = Array.isArray(result?.details?.results) ? result.details.results : [];
 	const orderedChildren = children
