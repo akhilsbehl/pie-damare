@@ -131,12 +131,54 @@ const QUIET_SUBAGENT_TOOLS = new Set(["subagent", "subagent_wait", "subagent_sup
 
 type SubagentCall = { action?: string; task?: string; message?: string };
 
+type SubagentChildResult = { index?: unknown; task?: unknown; finalOutput?: unknown };
+
+/**
+ * Preserve the user's Ctrl-K state while the installed subagent executor runs.
+ * Its only UI mutation is a forced collapse; every other UI member is forwarded.
+ */
+function withoutForcedSubagentCollapse(ctx: any): any {
+	if (!ctx?.ui) return ctx;
+
+	const ui = new Proxy(ctx.ui, {
+		get(target, property, receiver) {
+			const value = Reflect.get(target, property, receiver);
+			if (property === "setToolsExpanded" && typeof value === "function") {
+				return (expanded: unknown, ...args: unknown[]) =>
+					expanded === false ? undefined : value.apply(target, [expanded, ...args]);
+			}
+			return typeof value === "function" ? value.bind(target) : value;
+		},
+	});
+
+	return new Proxy(ctx, {
+		get(target, property, receiver) {
+			return property === "ui" ? ui : Reflect.get(target, property, receiver);
+		},
+	});
+}
+
 function renderRawSubagentDetails(call: SubagentCall | undefined, result: any, theme: any): Text {
 	const lines: string[] = [];
 	if (call?.action === "steer") lines.push(`requested_message: ${call.message ?? ""}`);
 	else if (!call?.action && call?.task !== undefined) lines.push(`task: ${call.task}`);
 
-	for (const child of result?.details?.results ?? []) {
+	const children = Array.isArray(result?.details?.results) ? result.details.results : [];
+	const orderedChildren = children
+		.map((child: unknown, position: number) => ({ child, position }))
+		.filter((entry): entry is { child: SubagentChildResult; position: number } =>
+			typeof entry.child === "object" && entry.child !== null,
+		)
+		.sort((left, right) => {
+			const leftIndex = typeof left.child.index === "number" && Number.isFinite(left.child.index) ? left.child.index : undefined;
+			const rightIndex = typeof right.child.index === "number" && Number.isFinite(right.child.index) ? right.child.index : undefined;
+			if (leftIndex !== undefined && rightIndex !== undefined) return leftIndex - rightIndex || left.position - right.position;
+			if (leftIndex !== undefined) return -1;
+			if (rightIndex !== undefined) return 1;
+			return left.position - right.position;
+		});
+	for (const { child } of orderedChildren) {
+		if (typeof child.task === "string") lines.push(`task: ${child.task}`);
 		if (typeof child.finalOutput === "string") lines.push(child.finalOutput);
 	}
 	return new Text(lines.length ? `\n${lines.map((line) => theme.fg("toolOutput", line)).join("\n")}` : "", 0, 0);
@@ -216,6 +258,9 @@ async function registerQuietSubagents(pi: ExtensionAPI): Promise<void> {
 						const calls = new Map<string, SubagentCall>();
 						pi.registerTool({
 							...definition,
+							async execute(toolCallId, params, signal, onUpdate, ctx) {
+								return definition.execute(toolCallId, params, signal, onUpdate, withoutForcedSubagentCollapse(ctx));
+							},
 							renderCall(args, theme, context) {
 								const id = String((context as any)?.toolCallId ?? "");
 								calls.set(id, args as SubagentCall);
