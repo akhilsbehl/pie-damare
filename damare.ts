@@ -421,9 +421,8 @@ export default async function (pi: ExtensionAPI) {
 		},
 
 		renderCall(args, theme, _context) {
-			const command = args.command || "...";
 			const timeout = args.timeout !== undefined ? theme.fg("muted", ` (${args.timeout}s)`) : "";
-			return new Text(`${theme.fg("toolTitle", theme.bold("bash"))} ${theme.fg("accent", `$ ${command}`)}${timeout}`, 0, 0);
+			return new Text(`${theme.fg("toolTitle", theme.bold("bash"))}${timeout}`, 0, 0);
 		},
 
 		renderResult(result, { expanded }, theme, _context) {
