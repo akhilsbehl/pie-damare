@@ -425,12 +425,13 @@ export default async function (pi: ExtensionAPI) {
 			return new Text(`${theme.fg("toolTitle", theme.bold("bash"))}${timeout}`, 0, 0);
 		},
 
-		renderResult(result, { expanded }, theme, _context) {
+		renderResult(result, { expanded }, theme, context) {
 			if (!expanded) return new Text("", 0, 0);
 
+			const command = typeof context.args?.command === "string" ? context.args.command : "...";
 			const textContent = result.content.find((content) => content.type === "text");
-			if (!textContent || textContent.type !== "text") return new Text("", 0, 0);
-			return new Text(`\n${theme.fg("toolOutput", textContent.text)}`, 0, 0);
+			const output = textContent?.type === "text" ? `\n${theme.fg("toolOutput", textContent.text)}` : "";
+			return new Text(`\n${theme.fg("accent", `$ ${command}`)}${output}`, 0, 0);
 		},
 	});
 
