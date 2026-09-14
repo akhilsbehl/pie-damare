@@ -20,6 +20,7 @@ import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent"
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
+	createBashTool,
 	createEditTool,
 	createFindTool,
 	createGrepTool,
@@ -46,6 +47,7 @@ const toolCache = new Map<string, ReturnType<typeof createBuiltInTools>>();
 
 function createBuiltInTools(cwd: string) {
 	return {
+		bash: createBashTool(cwd),
 		read: createReadTool(cwd),
 		edit: createEditTool(cwd),
 		write: createWriteTool(cwd),
@@ -403,6 +405,36 @@ export default async function (pi: ExtensionAPI) {
 	await registerQuietBackgroundTasks(pi);
 	await registerQuietSubagents(pi);
 	await registerQuietAgentBrowser(pi);
+	// =========================================================================
+	// Bash Tool
+	// =========================================================================
+	pi.registerTool({
+		name: "bash",
+		label: "bash",
+		description:
+			"Execute a bash command in the current working directory. Returns stdout and stderr. Output is truncated to last 2000 lines or 50KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.",
+		parameters: getBuiltInTools(process.cwd()).bash.parameters,
+
+		async execute(toolCallId, params, signal, onUpdate, ctx) {
+			const tools = getBuiltInTools(ctx.cwd);
+			return tools.bash.execute(toolCallId, params, signal, onUpdate, ctx);
+		},
+
+		renderCall(args, theme, _context) {
+			const command = args.command || "...";
+			const timeout = args.timeout !== undefined ? theme.fg("muted", ` (${args.timeout}s)`) : "";
+			return new Text(`${theme.fg("toolTitle", theme.bold("bash"))} ${theme.fg("accent", `$ ${command}`)}${timeout}`, 0, 0);
+		},
+
+		renderResult(result, { expanded }, theme, _context) {
+			if (!expanded) return new Text("", 0, 0);
+
+			const textContent = result.content.find((content) => content.type === "text");
+			if (!textContent || textContent.type !== "text") return new Text("", 0, 0);
+			return new Text(`\n${theme.fg("toolOutput", textContent.text)}`, 0, 0);
+		},
+	});
+
 	// =========================================================================
 	// Read Tool
 	// =========================================================================
