@@ -69,6 +69,10 @@ function getBuiltInTools(cwd: string) {
 type ToolDefinition = Parameters<ExtensionAPI["registerTool"]>[0];
 
 const QUIET_BG_TOOLS = new Set(["bash", "bg_list", "bg_output", "bg_stop"]);
+// Damare owns bash rendering itself (see export default below), so the
+// pi-bg-tasks bash definition is stashed here instead of being re-registered
+// quietly like bg_list/bg_output/bg_stop.
+let capturedBgBash: ToolDefinition | undefined;
 const PI_PACKAGE_NODE_MODULES = join(getAgentDir(), "npm", "node_modules");
 
 type ExtensionFactory = (pi: ExtensionAPI) => void | Promise<void>;
@@ -146,7 +150,12 @@ async function registerQuietBackgroundTasks(pi: ExtensionAPI): Promise<void> {
 		invalidate: () => {},
 	}));
 
+	capturedBgBash = captured.get("bash");
+	if (!capturedBgBash) {
+		throw new Error("Expected background-task tool was not captured: bash");
+	}
 	for (const name of QUIET_BG_TOOLS) {
+		if (name === "bash") continue;
 		const definition = captured.get(name);
 		if (!definition) {
 			throw new Error(`Expected background-task tool was not captured: ${name}`);
@@ -409,13 +418,18 @@ export default async function (pi: ExtensionAPI) {
 	// Bash Tool
 	// =========================================================================
 	pi.registerTool({
+		...capturedBgBash,
 		name: "bash",
 		label: "bash",
 		description:
+			capturedBgBash?.description ??
 			"Execute a bash command in the current working directory. Returns stdout and stderr. Output is truncated to last 2000 lines or 50KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.",
-		parameters: getBuiltInTools(process.cwd()).bash.parameters,
+		parameters: capturedBgBash?.parameters ?? getBuiltInTools(process.cwd()).bash.parameters,
 
 		async execute(toolCallId, params, signal, onUpdate, ctx) {
+			if (capturedBgBash) {
+				return capturedBgBash.execute(toolCallId, params, signal, onUpdate, ctx);
+			}
 			const tools = getBuiltInTools(ctx.cwd);
 			return tools.bash.execute(toolCallId, params, signal, onUpdate, ctx);
 		},
