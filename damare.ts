@@ -17,6 +17,7 @@
  */
 
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -81,13 +82,41 @@ type WorkflowScriptFormatter = (source: string) => Promise<string>;
 let workflowScriptFormatter: Promise<WorkflowScriptFormatter> | undefined;
 
 /**
+ * Resolve an installed package entry that may ship as either TypeScript source
+ * or compiled JavaScript depending on version. Selection is filesystem-based
+ * rather than error-code-based because the extension is transpiled to CJS by
+ * pi's jiti loader, where a missing ESM module surfaces as `MODULE_NOT_FOUND`,
+ * not `ERR_MODULE_NOT_FOUND`.
+ */
+async function importInstalledModule(extensionPath: string): Promise<{ default?: unknown }> {
+	const alternate = extensionPath.endsWith(".ts")
+		? extensionPath.replace(/\.ts$/, ".js")
+		: extensionPath.endsWith(".js")
+			? extensionPath.replace(/\.js$/, ".ts")
+			: undefined;
+	const candidates = alternate ? [extensionPath, alternate] : [extensionPath];
+
+	let lastError: unknown;
+	for (const candidate of candidates) {
+		if (!existsSync(candidate)) continue;
+		try {
+			return await import(pathToFileURL(candidate).href);
+		} catch (error) {
+			lastError = error;
+		}
+	}
+	if (lastError) throw lastError;
+	throw new Error(`Installed extension module not found: ${extensionPath}`);
+}
+
+/**
  * Load a currently installed Pi package at factory time. Keeping this out of
  * the static import graph means the package manager can replace a package
  * before this extension loads it, and avoids a machine-specific home path.
  */
 async function loadInstalledExtension(packageName: string, relativePath: string): Promise<ExtensionFactory> {
 	const extensionPath = join(PI_PACKAGE_NODE_MODULES, packageName, relativePath);
-	const module = await import(pathToFileURL(extensionPath).href);
+	const module = await importInstalledModule(extensionPath);
 	if (typeof module.default !== "function") {
 		throw new Error(`Installed package extension has no default factory: ${packageName}`);
 	}
