@@ -16,7 +16,7 @@
  * Then use ctrl+o to toggle between minimal (collapsed) and full (expanded) views.
  */
 
-import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, InteractiveMode, SettingsManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -439,7 +439,165 @@ async function registerQuietAgentBrowser(pi: ExtensionAPI): Promise<void> {
 	}
 }
 
+// =============================================================================
+// Thinking-block suppression by model
+// =============================================================================
+// Pi has no extension API for thinking-block visibility, so Damare adds a
+// per-model default by patching the live interactive session:
+//   - SettingsManager#getHideThinkingBlock returns the model default while no
+//     manual toggle has happened this session.
+//   - InteractiveMode#applyRuntimeSettings is wrapped to capture the resolved
+//     session model before Pi re-reads that setting (this runs before the
+//     initial transcript is rendered).
+//   - Ctrl+T (or Settings > Hide thinking blocks) still wins for the session.
+
+/**
+ * Models whose thinking blocks start hidden. Patterns match both
+ * `provider/modelId` and bare `modelId`, with `*` and `?` wildcards.
+ *
+ * These are open-weight models whose thinking is long "thinking out loud" text
+ * with little skimmable value. Closed models are deliberately absent: they emit
+ * only a short thinking summary, which is worth keeping visible.
+ *
+ * Override for one run with `PI_DAMARE_HIDE_THINKING_MODELS` (comma- or
+ * space-separated patterns).
+ */
+const DEFAULT_HIDE_THINKING_MODELS = [
+	"openrouter/deepseek/*",
+	"deepseek/*",
+	"deepseek-ai/*",
+	"qwen/*",
+	"openrouter/qwen/*",
+	"moonshotai/*",
+	"openrouter/moonshotai/*",
+	"zai/*",
+	"z-ai/*",
+	"openrouter/z-ai/*",
+	"minimax/*",
+	"openrouter/minimax/*",
+];
+
+const HIDE_THINKING_STATE = Symbol.for("pie-damare.hideThinkingState");
+const HIDE_THINKING_PATCHED = Symbol.for("pie-damare.hideThinkingPatched");
+
+type ThinkingModelRef = { provider: string; id: string };
+
+interface HideThinkingState {
+	activeModel?: ThinkingModelRef;
+	/** Set once the user toggles visibility in this process. */
+	userToggled: boolean;
+	/** Live InteractiveMode instance, so mid-session model changes re-apply. */
+	interactive?: any;
+}
+
+function getHideThinkingState(): HideThinkingState {
+	const host = globalThis as any;
+	return (host[HIDE_THINKING_STATE] ??= { userToggled: false } as HideThinkingState);
+}
+
+function hideThinkingPatterns(): string[] {
+	const override = process.env.PI_DAMARE_HIDE_THINKING_MODELS;
+	if (override && override.trim()) {
+		return override.split(/[\s,]+/).filter(Boolean);
+	}
+	return DEFAULT_HIDE_THINKING_MODELS;
+}
+
+/** Minimal glob match (`*`, `?`) so we do not depend on minimatch. */
+function globMatches(pattern: string, value: string): boolean {
+	const regex = pattern
+		.replace(/[.+^${}()|[\]\\]/g, "\\$&")
+		.replace(/\*/g, ".*")
+		.replace(/\?/g, ".");
+	return new RegExp(`^${regex}$`).test(value);
+}
+
+function shouldHideThinkingForModel(model: ThinkingModelRef | undefined): boolean {
+	if (!model?.id) return false;
+	return hideThinkingPatterns().some(
+		(pattern) => globMatches(pattern, `${model.provider}/${model.id}`) || globMatches(pattern, model.id),
+	);
+}
+
+/** Track the active model; a change discards the manual toggle from the old model. */
+function updateActiveModel(model: ThinkingModelRef | undefined): void {
+	if (!model?.id) return;
+	const state = getHideThinkingState();
+	if (state.activeModel?.provider !== model.provider || state.activeModel?.id !== model.id) {
+		state.userToggled = false;
+	}
+	state.activeModel = { provider: model.provider, id: model.id };
+}
+
+/** Push the model default onto the live transcript, honouring a manual toggle. */
+function applyThinkingVisibility(model: ThinkingModelRef | undefined): void {
+	if (model?.id) updateActiveModel(model);
+	const state = getHideThinkingState();
+	if (state.userToggled) return;
+	const instance = state.interactive;
+	if (!instance) return;
+	// Read through the patched getter so an explicit `hideThinkingBlock: true`
+	// in settings still hides thinking for closed models too.
+	const hidden =
+		instance.settingsManager?.getHideThinkingBlock?.() ?? shouldHideThinkingForModel(state.activeModel);
+	if (instance.hideThinkingBlock !== hidden) {
+		instance.hideThinkingBlock = hidden;
+		instance.updateThinkingBlockVisibility?.();
+	}
+}
+
+/** Install the process-wide patches exactly once (survives extension reloads). */
+function installThinkingSuppressionPatch(): void {
+	const host = globalThis as any;
+	if (host[HIDE_THINKING_PATCHED]) return;
+	host[HIDE_THINKING_PATCHED] = true;
+
+	const originalGet = SettingsManager.prototype.getHideThinkingBlock;
+	SettingsManager.prototype.getHideThinkingBlock = function (this: SettingsManager): boolean {
+		const state = getHideThinkingState();
+		if (!state.userToggled && shouldHideThinkingForModel(state.activeModel)) {
+			return true;
+		}
+		return originalGet.call(this);
+	};
+
+	const originalSet = SettingsManager.prototype.setHideThinkingBlock;
+	SettingsManager.prototype.setHideThinkingBlock = function (this: SettingsManager, hide: boolean): void {
+		getHideThinkingState().userToggled = true;
+		return originalSet.call(this, hide);
+	};
+
+	const originalApply = InteractiveMode.prototype.applyRuntimeSettings;
+	(InteractiveMode.prototype as any).applyRuntimeSettings = function (this: any, ...args: unknown[]) {
+		const state = getHideThinkingState();
+		state.interactive = this;
+		const model = this?.session?.model;
+		if (model?.provider && model?.id) {
+			updateActiveModel({ provider: model.provider, id: model.id });
+		}
+		return originalApply.apply(this, args);
+	};
+}
+
+function registerThinkingSuppression(pi: ExtensionAPI): void {
+	installThinkingSuppressionPatch();
+
+	pi.on("session_start", (event, ctx) => {
+		// New/resumed/forked sessions re-apply the per-model default. A reload
+		// keeps whatever the user toggled in the current session.
+		if (event.reason !== "reload") {
+			getHideThinkingState().userToggled = false;
+		}
+		applyThinkingVisibility(ctx.model as ThinkingModelRef | undefined);
+	});
+
+	pi.on("model_select", (event, ctx) => {
+		applyThinkingVisibility((event.model ?? ctx.model) as ThinkingModelRef | undefined);
+	});
+}
+
 export default async function (pi: ExtensionAPI) {
+	registerThinkingSuppression(pi);
 	await registerQuietBackgroundTasks(pi);
 	await registerQuietSubagents(pi);
 	await registerQuietAgentBrowser(pi);
