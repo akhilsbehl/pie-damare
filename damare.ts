@@ -456,13 +456,16 @@ async function registerQuietAgentBrowser(pi: ExtensionAPI): Promise<void> {
  * `provider/modelId` and bare `modelId`, with `*` and `?` wildcards.
  *
  * These are open-weight models whose thinking is long "thinking out loud" text
- * with little skimmable value. Closed models are deliberately absent: they emit
- * only a short thinking summary, which is worth keeping visible.
+ * with little skimmable value, plus the `stealth/*` provider namespace that
+ * serves the same class of models under an alias prefix. Other closed models are
+ * deliberately absent: they emit only a short thinking summary, which is worth
+ * keeping visible.
  *
  * Override for one run with `PI_DAMARE_HIDE_THINKING_MODELS` (comma- or
  * space-separated patterns).
  */
 const DEFAULT_HIDE_THINKING_MODELS = [
+	// Open-weight reasoning families, reached directly and via OpenRouter.
 	"openrouter/deepseek/*",
 	"deepseek/*",
 	"deepseek-ai/*",
@@ -475,6 +478,9 @@ const DEFAULT_HIDE_THINKING_MODELS = [
 	"openrouter/z-ai/*",
 	"minimax/*",
 	"openrouter/minimax/*",
+
+	// Alias provider namespace for the same verbose reasoning models.
+	"stealth/*",
 ];
 
 const HIDE_THINKING_STATE = Symbol.for("pie-damare.hideThinkingState");
