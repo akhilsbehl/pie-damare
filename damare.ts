@@ -398,47 +398,6 @@ async function registerQuietSubagents(pi: ExtensionAPI): Promise<void> {
 	}
 }
 
-function isQuietAgentBrowserTool(name: string): boolean {
-	return name === "agent_browser" || name.startsWith("agent_browser_");
-}
-
-async function registerQuietAgentBrowser(pi: ExtensionAPI): Promise<void> {
-	const captured = new Map<string, ToolDefinition>();
-	const forwardingPi = new Proxy(pi, {
-		get(target, property, receiver) {
-			if (property === "registerTool") {
-				return (definition: ToolDefinition) => {
-					if (isQuietAgentBrowserTool(definition.name)) {
-						captured.set(definition.name, definition);
-						return;
-					}
-					pi.registerTool(definition);
-				};
-			}
-			const value = Reflect.get(target, property, receiver);
-			return typeof value === "function" ? value.bind(target) : value;
-		},
-	}) as ExtensionAPI;
-
-	const agentBrowserExtension = await loadInstalledExtension(
-		"pi-agent-browser-native",
-		"dist/extensions/agent-browser/index.js",
-	);
-	await agentBrowserExtension(forwardingPi);
-
-	if (!captured.has("agent_browser")) {
-		throw new Error("Expected agent-browser tool was not captured: agent_browser");
-	}
-	for (const [name, definition] of captured) {
-		pi.registerTool({
-			...definition,
-			renderResult() {
-				return new Text("", 0, 0);
-			},
-		});
-	}
-}
-
 // =============================================================================
 // Thinking-block suppression by model
 // =============================================================================
@@ -606,7 +565,6 @@ export default async function (pi: ExtensionAPI) {
 	registerThinkingSuppression(pi);
 	await registerQuietBackgroundTasks(pi);
 	await registerQuietSubagents(pi);
-	await registerQuietAgentBrowser(pi);
 	// =========================================================================
 	// Bash Tool
 	// =========================================================================
