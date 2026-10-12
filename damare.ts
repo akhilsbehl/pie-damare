@@ -23,11 +23,14 @@ import { pathToFileURL } from "node:url";
 import {
 	createBashTool,
 	createEditTool,
+	createEditToolDefinition,
 	createFindTool,
 	createGrepTool,
 	createLsTool,
 	createReadTool,
+	createReadToolDefinition,
 	createWriteTool,
+	createWriteToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Box, Text } from "@earendil-works/pi-tui";
 import { homedir } from "os";
@@ -273,9 +276,6 @@ function getMessageText(message: any): string {
 }
 
 function getSubagentNotificationOutput(message: any): string {
-	const details = message?.details;
-	if (typeof details?.resultPreview === "string") return details.resultPreview.trim();
-
 	const lines = getMessageText(message).split("\n");
 	const header = lines[0] ?? "";
 	const isSingleCompletion = /^(Background task|Detached foreground task) (completed|failed|paused|stopped): /.test(header);
@@ -593,11 +593,11 @@ export default async function (pi: ExtensionAPI) {
 	// Read Tool
 	// =========================================================================
 	pi.registerTool({
+		...createReadToolDefinition(process.cwd()),
 		name: "read",
 		label: "read",
 		description:
 			"Read the contents of a file. Supports text files and images (jpg, png, gif, webp). Images are sent as attachments. For text files, output is truncated to 2000 lines or 50KB (whichever is hit first). Use offset/limit for large files.",
-		parameters: getBuiltInTools(process.cwd()).read.parameters,
 
 		async execute(toolCallId, params, signal, onUpdate, ctx) {
 			const tools = getBuiltInTools(ctx.cwd);
@@ -640,11 +640,11 @@ export default async function (pi: ExtensionAPI) {
 	// Write Tool
 	// =========================================================================
 	pi.registerTool({
+		...createWriteToolDefinition(process.cwd()),
 		name: "write",
 		label: "write",
 		description:
 			"Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.",
-		parameters: getBuiltInTools(process.cwd()).write.parameters,
 
 		async execute(toolCallId, params, signal, onUpdate, ctx) {
 			const tools = getBuiltInTools(ctx.cwd);
@@ -680,11 +680,11 @@ export default async function (pi: ExtensionAPI) {
 	// Edit Tool
 	// =========================================================================
 	pi.registerTool({
+		...createEditToolDefinition(process.cwd()),
 		name: "edit",
 		label: "edit",
 		description:
 			"Edit a file by replacing exact text. The oldText must match exactly (including whitespace). Use this for precise, surgical edits.",
-		parameters: getBuiltInTools(process.cwd()).edit.parameters,
 
 		async execute(toolCallId, params, signal, onUpdate, ctx) {
 			const tools = getBuiltInTools(ctx.cwd);
