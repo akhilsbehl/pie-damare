@@ -16,7 +16,7 @@
  * Then use ctrl+o to toggle between minimal (collapsed) and full (expanded) views.
  */
 
-import { getAgentDir, InteractiveMode, SettingsManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, InteractiveMode, keyText, SettingsManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -198,7 +198,7 @@ async function registerQuietBackgroundTasks(pi: ExtensionAPI): Promise<void> {
 	}
 }
 
-const QUIET_SUBAGENT_TOOLS = new Set(["subagent", "subagent_wait", "subagent_supervisor"]);
+const QUIET_SUBAGENT_TOOLS = new Set(["subagent", "subagent_supervisor"]);
 
 type SubagentCall = { action?: string; task?: string; message?: string; workflowScript?: string };
 
@@ -302,7 +302,8 @@ function renderSubagentNotification(message: any, options: any, theme: any): Box
 	if (!options.expanded) {
 		// Keep the collapsed completion row coloured without exposing its output.
 		const box = new Box(1, 0, (text: string) => theme.bg("toolPendingBg", text));
-		box.addChild(new Text("Subagent result — Ctrl-K to expand", 0, 0));
+		const expandKeys = keyText("app.tools.expand");
+		box.addChild(new Text(`Subagent result${expandKeys ? ` — ${expandKeys} to expand` : ""}`, 0, 0));
 		return box;
 	}
 	if (!output) return new Text("", 0, 0);
@@ -348,7 +349,7 @@ async function registerQuietSubagents(pi: ExtensionAPI): Promise<void> {
 							renderCall(args, theme, context) {
 								const id = String((context as any)?.toolCallId ?? "");
 								calls.set(id, args as SubagentCall);
-								return definition.renderCall?.(args, theme, context) ?? new Text("subagent", 0, 0);
+								return definition.renderCall!(args, theme, context);
 							},
 							renderResult(result, options, theme, context) {
 								if (!options.expanded) return new Text("", 0, 0);
@@ -373,19 +374,13 @@ async function registerQuietSubagents(pi: ExtensionAPI): Promise<void> {
 	// raw output only when Damare's expanded view is selected.
 	pi.registerMessageRenderer("subagent-notify", renderSubagentNotification);
 	for (const messageType of [
-		"subagent_notify",
 		"subagent_supervisor_request",
-		"subagent-supervisor-request",
 		"subagent_control_notice",
 		"subagent-control-notice",
 		"subagent_steering_notice",
-		"subagent-steering-notice",
 		"subagent_watchdog_warning",
-		"subagent-watchdog-warning",
 		"subagent-wait-subscription",
-		"subagent_wait_subscription",
 		"subagents-admin",
-		"subagents_admin",
 	]) {
 		pi.registerMessageRenderer(messageType, () => ({
 			render: () => [],
@@ -572,17 +567,11 @@ export default async function (pi: ExtensionAPI) {
 		...capturedBgBash,
 		name: "bash",
 		label: "bash",
-		description:
-			capturedBgBash?.description ??
-			"Execute a bash command in the current working directory. Returns stdout and stderr. Output is truncated to last 2000 lines or 50KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.",
-		parameters: capturedBgBash?.parameters ?? getBuiltInTools(process.cwd()).bash.parameters,
+		description: capturedBgBash!.description,
+		parameters: capturedBgBash!.parameters,
 
 		async execute(toolCallId, params, signal, onUpdate, ctx) {
-			if (capturedBgBash) {
-				return capturedBgBash.execute(toolCallId, params, signal, onUpdate, ctx);
-			}
-			const tools = getBuiltInTools(ctx.cwd);
-			return tools.bash.execute(toolCallId, params, signal, onUpdate, ctx);
+			return capturedBgBash!.execute(toolCallId, params, signal, onUpdate, ctx);
 		},
 
 		renderCall(args, theme, _context) {
@@ -678,11 +667,9 @@ export default async function (pi: ExtensionAPI) {
 			}
 
 			// Expanded mode: show error if any
-			if (result.content.some((c) => c.type === "text" && c.text)) {
-				const textContent = result.content.find((c) => c.type === "text");
-				if (textContent?.type === "text" && textContent.text) {
-					return new Text(`\n${theme.fg("error", textContent.text)}`, 0, 0);
-				}
+			const textContent = result.content.find((c) => c.type === "text");
+			if (textContent?.type === "text" && textContent.text) {
+				return new Text(`\n${theme.fg("error", textContent.text)}`, 0, 0);
 			}
 
 			return new Text("", 0, 0);
